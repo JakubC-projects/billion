@@ -1,4 +1,4 @@
-module github.com/jakubc-projects/find-diamond
+module github.com/jakubc-projects/billion
 
 go 1.23.0
 

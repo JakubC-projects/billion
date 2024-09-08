@@ -1,4 +1,4 @@
-package diamond
+package billion
 
 import (
 	"bytes"
