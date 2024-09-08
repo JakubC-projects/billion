@@ -17,6 +17,10 @@ import (
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize: 50,
+	CheckOrigin: func(r *http.Request) bool {
+		// allow all connections by default
+		return true
+	},
 }
 
 const MapSize = 32768
