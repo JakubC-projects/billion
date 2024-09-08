@@ -23,7 +23,7 @@ func main() {
 
 	addr := ":8080"
 	if port != "" {
-		addr = fmt.Sprint(":%d", port)
+		addr = fmt.Sprintf(":%s", port)
 	}
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
