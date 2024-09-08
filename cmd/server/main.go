@@ -1,11 +1,15 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/jakubc-projects/billion"
 )
+
+var port = os.Getenv("PORT")
 
 func main() {
 	mux := http.NewServeMux()
@@ -17,7 +21,12 @@ func main() {
 
 	mux.Handle("/", http.FileServer(http.Dir("public")))
 
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	addr := ":8080"
+	if port != "" {
+		addr = fmt.Sprint(":%d", port)
+	}
+
+	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
 	}
 }
