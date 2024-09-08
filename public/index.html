@@ -1,0 +1,388 @@
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <style>
+        body {
+            margin: 8px;
+            color: white;
+
+            background-color: black;
+        }
+
+        #boxes {
+            width: calc(100vw - 40px);
+            height: calc(100vw - 40px);
+            max-width: 1024px;
+            max-height: 1024px;
+            border: 4px solid white;
+            overflow: auto;
+            margin: 0px auto;
+            background-color: rgb(47, 47, 47);
+        }
+        #boxes-inner {
+            overflow:hidden;
+            position: relative;
+            width: 1048576px;
+            height: 1048576px;
+        }
+
+        .box-chunk {
+            width: 1024px;
+            height: 1024px;
+            position: absolute;
+            display: flex;
+            flex-wrap: wrap;
+        }
+        .box-chunk .box {
+            width: 24px;
+            height: 24px;
+            border: solid 4px  rgb(47, 47, 47);
+            background-color: #444;
+        }
+        .box-chunk .box.mark {
+            background-color: red;
+        }
+        
+    </style>
+</head>
+<body>
+    <h1>Find the diamond!</h1>
+    <h3>Uncovered:</h3>
+    <p id="uncoveredCount"></p>
+    <h3>Players online:</h3>
+    <p id="onlineCount"></p>
+
+    <div id="boxes">
+        <div id="boxes-inner">
+        </div>
+    </div>
+    <script>
+        const mapSize = 32768
+        const bytesInRow = mapSize / 8
+        const chunkSize = 32
+        const chunkCount = mapSize / chunkSize
+
+        const map = new Uint8Array(bytesInRow * mapSize)
+        
+        /**
+         * @param x {number}
+         * @param y {number}
+         */
+        function uncoverBox(x, y) {
+            map[y*bytesInRow + Math.floor(x/8)] |= (1 << 7-(x % 8))
+        }
+
+        /**
+         * @param chunkX {number}
+         * @param chunkY {number}
+         * @param data {Uint8Array}
+         */
+         function setChunk(chunkX, chunkY, data) {
+            for(let y = 0; y < chunkSize; y ++) {
+                for(let x = 0; x < chunkSize / 8; x ++) {
+                    const byteIdx = (chunkY * chunkSize + y) * bytesInRow + (chunkX * chunkSize/8) + x
+                    map[byteIdx] |= data[y * chunkSize/8 + x]
+                }
+            }
+        }
+
+        /**
+         * @param x {number}
+         * @param y {number}
+         * @returns {boolean}
+         */
+        function isBoxUncovered(x, y) {
+            return (map[y*bytesInRow + Math.floor(x/8)] & (1 << 7-(x % 8))) != 0
+        }
+
+    </script>
+    <script>
+        const uncoveredCountDiv = document.getElementById("uncoveredCount")
+        const onlineCountDiv = document.getElementById("onlineCount")
+        const MESSAGE_CHECK_BOX=0
+        const MESSAGE_CHUNK_REQUEST=2
+        const MESSAGE_CHUNK_RESPONSE=3
+        const MESSAGE_GAME_STATS=4
+        const websocket = new WebSocket("/websocket")
+        websocket.onopen = () => {
+            render()
+        }
+
+        websocket.binaryType = "arraybuffer";
+        const textEncoder = new TextEncoder(); // always utf-8
+
+        // Listen for messages
+        websocket.addEventListener("message", (event) => {
+            if (!event.data instanceof ArrayBuffer) {
+                return
+            }
+            // binary frame
+            const view = new DataView(event.data);
+            const messageType = view.getUint8(0)
+            switch(messageType) {
+                case MESSAGE_GAME_STATS: {
+                    const gameUpdate = parseGameUpdate(view)
+                    uncoveredCountDiv.innerText = gameUpdate.uncoveredCount
+                    onlineCountDiv.innerText = gameUpdate.onlineCount
+                    for(const uncover of gameUpdate.recentUncovers) {
+                        const boxId = uncover.y * chunkSize + uncover.x
+
+                        setTimeout(() => {
+                            uncoverBox(uncover.x, uncover.y)
+                        }, uncover.timing)
+                    }
+                    break;
+                }
+                case MESSAGE_CHUNK_RESPONSE: {
+                    const chunksResponse = parseChunksResponse(view)
+                    for(const chunk of chunksResponse) {
+                        setChunk(chunk.x, chunk.y, chunk.chunk)
+                    }
+                    
+                    break;
+                }
+                default: {
+                    console.error("unknown message type")
+                }
+            }
+        });
+
+        /**
+         * @param view {DataView}
+         */
+        function parseGameUpdate(view) {
+            const uncoveredCount = view.getUint32(1)
+            const onlineCount = view.getUint32(5)
+            const goldPositionsLen = view.getUint16(9)
+            let currentByte = 11
+            currentByte += goldPositionsLen * 4
+            const recentlyUncoveredLen = view.getUint16(currentByte)
+            currentByte += 2
+            const recentUncovers = []
+            for(let i = 0; i < recentlyUncoveredLen; i ++) {
+                const x = view.getUint16(currentByte)
+                currentByte += 2
+                const y = view.getUint16(currentByte)
+                currentByte += 2
+                const timing = view.getUint8(currentByte)
+                currentByte += 1
+                recentUncovers.push({x, y, timing})
+            }
+            return {
+                uncoveredCount: view.getUint32(1),
+                onlineCount: view.getUint32(5),
+                recentUncovers
+            }
+        }
+
+        const chunkDataLength = chunkSize * chunkSize / 8
+
+        /**
+         * @param view {DataView}
+         */
+        function parseChunksResponse(view) {
+            const chunksLen = view.getUint16(1)
+            let currentByte = 3
+
+            const chunksData = []
+
+            for(let i = 0; i < chunksLen; i ++) {
+                const x = view.getUint16(currentByte)
+                currentByte += 2
+                const y = view.getUint16(currentByte)
+                currentByte += 2
+                const chunk = new Uint8Array(view.buffer.slice(currentByte, currentByte + chunkDataLength))
+                currentByte += chunkDataLength
+                chunksData.push({x, y, chunk})
+            }
+            return chunksData
+        }
+
+        /**
+         * @param x {number}
+         * @param y {number}
+         * @returns {ArrayBuffer}
+         */
+        function encodeBoxUncoverRequest(x, y) {
+            const data = new ArrayBuffer(5)
+            const view = new DataView(data)
+            view.setUint8(0, MESSAGE_CHECK_BOX)
+            view.setUint16(1, x)
+            view.setUint16(3, y)
+            return data
+        }
+        /**
+         * @param chunks {{x: number, y: number}[]}
+         * @returns {ArrayBuffer}
+         */
+         function encodeChunkRequest(chunks) {
+            const data = new ArrayBuffer(3 + chunks.length * 4)
+            const view = new DataView(data)
+            view.setUint8(0, MESSAGE_CHUNK_REQUEST)
+            view.setUint16(1, chunks.length)
+            let currentByte = 3
+            for(const c of chunks) {
+                view.setUint16(currentByte, c.x)
+                currentByte += 2
+                view.setUint16(currentByte, c.y)
+                currentByte += 2
+            }
+            return data
+        }
+    </script>
+
+    <script>
+        /**
+         * @type Set<number>
+         */
+        const loadedChunks = new Set()
+        /**
+         * @param chunkX {number}
+         * @param chunkY {number}
+         * @returns {boolean}
+         */
+        function isChunkLoaded(chunkX, chunkY) {
+            return loadedChunks.has(chunkY * chunkCount + chunkX)
+        }
+        /**
+         * @param chunkX {number}
+         * @param chunkX {number}
+         */
+        function setChunkLoaded(chunkX, chunkY) {
+            loadedChunks.add(chunkY * chunkCount + chunkX)
+        }
+    </script>
+
+    <script>
+        const boxesOuter = document.getElementById("boxes")
+        boxesOuter.onclick = boxClick
+        const boxContainer = document.getElementById("boxes-inner")
+
+        const boxSize = 32
+        const chunkSizePx = chunkSize * boxSize
+
+        /**
+         * @type HTMLElement[]
+         */
+        const boxChunks  = []
+        for(let i = 0; i < 9; i ++) {
+            createBoxChunk()
+        }
+        
+
+        function render() {
+            const centerX = Math.floor(boxesOuter.scrollLeft + boxesOuter.clientWidth/2)
+            const centerY = Math.floor(boxesOuter.scrollTop + boxesOuter.clientHeight/2)
+
+            const centerXChunk = Math.floor(centerX / (chunkSizePx))
+            const centerYChunk = Math.floor(centerY / (chunkSizePx))
+
+            const centerChunkXPx = centerX - centerX % chunkSizePx
+            const centerChunkYPx = centerY - centerY % chunkSizePx
+
+            /**
+             * @type  {{x: number, y: number}[]}
+             */
+            let chunksToLoad = []
+            for(let i = -1; i <=1; i ++) {
+                for(let j = -1; j <=1; j ++) {
+                    const chunkX = (centerXChunk + i)
+                    const chunkY = (centerYChunk + j)
+                    const chunkPosX = centerChunkXPx + i * chunkSizePx
+                    const chunkPosY = centerChunkYPx + j * chunkSizePx
+
+                    const chunkArrayPosition = ((chunkY + 3) % 3) * 3 + ((chunkX + 3) % 3)
+                    const chunk = boxChunks[chunkArrayPosition]
+                    chunk.style.left = `${chunkPosX}px`
+                    chunk.style.top = `${chunkPosY}px`
+                    chunk.setAttribute("data-position-x", chunkX)
+                    chunk.setAttribute("data-position-y", chunkY)
+                    if(chunkX >=0 && chunkX < chunkCount && chunkY >= 0 && chunkY < chunkCount) {
+                        renderChunkBoxes(chunk, chunkX, chunkY)
+                        if(!isChunkLoaded(chunkX, chunkY)) {
+                            chunksToLoad.push({x:chunkX, y:chunkY})
+                            setChunkLoaded(chunkX, chunkY)
+                        }
+                    }
+                }
+            }
+            if(chunksToLoad.length > 0) {
+                websocket.send(encodeChunkRequest(chunksToLoad))
+            }
+            requestAnimationFrame(render)
+        }
+
+        /**
+         * @param chunk {HTMLElement}
+         * @param chunkX {number}
+         * @param chunkY {number}
+         */
+        function renderChunkBoxes(chunk, chunkX, chunkY) {
+            const a = chunk.children[1]
+            for(let boxY = 0; boxY < chunkSize; boxY ++) {
+                for(let boxX = 0; boxX < chunkSize; boxX ++) {
+                    const x = chunkX * chunkSize + boxX
+                    const y = chunkY * chunkSize + boxY
+                    const boxEl = chunk.children[boxY * chunkSize + boxX]
+                    if(isBoxUncovered(x, y)) {
+                        boxEl.classList.add("mark")
+                    } else {
+                        boxEl.classList.remove("mark")
+                    }
+                }
+            }
+        }
+
+        function createBoxChunk() {
+            const boxChunk = document.createElement('div')
+            boxChunk.classList.add('box-chunk')
+            for(let y = 0; y < chunkSize ; y++) {
+                for(let x = 0; x < chunkSize; x++) {
+                    const box = document.createElement('div')
+                    box.classList.add('box')
+                    box.setAttribute("data-position-x", x)
+                    box.setAttribute("data-position-y", y)
+                    
+                    boxChunk.append(box)
+                }
+            }
+            boxContainer.append(boxChunk)
+            boxChunks.push(boxChunk)
+        }
+
+        /**
+         * @param ev {MouseEvent}
+         */
+        function boxClick(ev) {
+            /**
+             * @type HTMLElement
+             */
+            const target = ev.target
+            if(!target.classList.contains("box")) return;
+
+            const positionX = getElementXPosition(target.parentElement) * chunkSize + getElementXPosition(target)
+            const positionY = getElementYPosition(target.parentElement) * chunkSize + getElementYPosition(target)
+            if(positionX < 0 || positionY < 0) {
+                return;
+            }
+            uncoverBox(positionX, positionY)
+
+            websocket.send(encodeBoxUncoverRequest(positionX, positionY))
+        }
+
+        /**
+         * @param el {HTMLElement}
+         */
+        function getElementXPosition(el) {
+            return Number(el.getAttribute("data-position-x"))
+        }
+        /**
+         * @param el {HTMLElement}
+         */
+        function getElementYPosition(el) {
+            return Number(el.getAttribute("data-position-y"))
+        }
+    </script>
+</body>
+</html>
