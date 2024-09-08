@@ -1,7 +1,9 @@
 package main
 
 import (
+	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +13,9 @@ import (
 
 var port = os.Getenv("PORT")
 
+//go:embed public/*
+var publicFiles embed.FS
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -19,7 +24,8 @@ func main() {
 
 	mux.HandleFunc("/websocket", wsServer.Serve)
 
-	mux.Handle("/", http.FileServer(http.Dir("public")))
+	fs, _ := fs.Sub(publicFiles, "public")
+	mux.Handle("/", http.FileServerFS(fs))
 
 	addr := ":8080"
 	if port != "" {
